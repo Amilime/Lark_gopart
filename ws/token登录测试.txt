@@ -1,0 +1,20 @@
+// 不带 Token，直接连
+new WebSocket("ws://localhost:8081/ws");
+
+// A. 先登录 (找 Java 要 Token)
+var myToken = "";
+fetch('http://localhost:8080/user/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: "user1", password: "123456" })
+}).then(r=>r.json()).then(d => {
+    myToken = d.data;
+    console.log("拿到 Token:", myToken);
+
+// B. 带着 Token 连 Go (注意 URL 格式)
+    var wsUrl = "ws://localhost:8081/ws?token=" + myToken;
+    var socket = new WebSocket(wsUrl);
+
+    socket.onopen = () => console.log("✅ 身份验证通过，连接成功！");
+    socket.onmessage = (e) => console.log("收到:", e.data);
+});
