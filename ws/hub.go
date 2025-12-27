@@ -4,51 +4,72 @@ import (
 	"fmt"
 )
 
-type Hub struct {
-	Register   chan *HubClient
-	Unregister chan *HubClient
-	Broadcast  chan []byte
-	Clients    map[*HubClient]bool
-	// 注册通道，新人指针在里头  注销通道，断开指针去这里 广播，有人说话就在这里 在线名单，所有连接map
+// 广播消息的结构体：不仅包含内容，还包含“送到哪去”
+type BroadcastMsg struct {
+	RoomID string // 也就是 DocID
+	Data   []byte
 }
 
-func NewHub() *Hub { // 创建新的Hub中心，该函数类型是*Hub （即返回Hub)
+type Hub struct {
+	// 【关键修改】不再是 Clients map[*HubClient]bool
+	// 而是 Rooms: Key是房间号(DocID), Value是这个房间里的人
+	Rooms map[string]map[*HubClient]bool
+
+	Register   chan *HubClient
+	Unregister chan *HubClient
+
+	// 【关键修改】广播通道接收的是 BroadcastMsg 结构体
+	Broadcast chan *BroadcastMsg
+}
+
+func NewHub() *Hub {
 	return &Hub{
-		Register:   make(chan *HubClient), //channel是通道，该通道只运送HubClient类型的指针（结构体）
-		Unregister: make(chan *HubClient), // Main协程在头部把用户塞管子里，Hub协程在尾部取用户
-		Broadcast:  make(chan []byte),
-		Clients:    make(map[*HubClient]bool),
+		Rooms:      make(map[string]map[*HubClient]bool),
+		Register:   make(chan *HubClient),
+		Unregister: make(chan *HubClient),
+		Broadcast:  make(chan *BroadcastMsg),
 	}
 }
 
 func (h *Hub) Run() { // h的意思是把Run绑定到Hub上，就是后面h就代表hub了，和java的this差不多
 	for {
-		// select 是 Go 处理并发的神技，谁有消息处理谁
 		select {
-		// 有人注册
-		case client := <-h.Register: // 这个代码是会阻塞的，从h.register取出一个值赋值给client
-			h.Clients[client] = true
-			fmt.Println("用户加入，当前在线人数:", len(h.Clients))
+		// 1. 有人进房
+		case client := <-h.Register:
+			// 如果房间不存在，先造一个房间
+			if _, ok := h.Rooms[client.DocID]; !ok {
+				h.Rooms[client.DocID] = make(map[*HubClient]bool)
+			}
+			// 把人放进房间
+			h.Rooms[client.DocID][client] = true
+			fmt.Printf("用户进入房间 [%s]，当前房间人数: %d\n", client.DocID, len(h.Rooms[client.DocID]))
 
-		// 有人注销
+		// 2. 有人退房
 		case client := <-h.Unregister:
-			if _, ok := h.Clients[client]; ok {
-				delete(h.Clients, client)
-				close(client.Send) // 关闭发送通道
-				fmt.Println("用户离开，当前在线人数:", len(h.Clients))
+			if room, ok := h.Rooms[client.DocID]; ok {
+				if _, ok := room[client]; ok {
+					delete(room, client)
+					close(client.Send)
+					fmt.Printf("用户离开房间 [%s]，剩余人数: %d\n", client.DocID, len(room))
+
+					// 如果房间空了，可以销毁房间（省内存）
+					if len(room) == 0 {
+						delete(h.Rooms, client.DocID)
+					}
+				}
 			}
 
-		// 有消息要广播
-		case message := <-h.Broadcast:
-			// 遍历所有人，发消息
-			for client := range h.Clients {
-				select {
-				case client.Send <- message:
-					// 发送成功
-				default:
-					// 发送失败（比如对方卡死了），直接踢掉
-					close(client.Send)
-					delete(h.Clients, client)
+		// 3. 广播消息
+		case msg := <-h.Broadcast:
+			// 只找特定房间的人
+			if room, ok := h.Rooms[msg.RoomID]; ok {
+				for client := range room {
+					select {
+					case client.Send <- msg.Data:
+					default:
+						close(client.Send)
+						delete(room, client)
+					}
 				}
 			}
 		}

@@ -20,6 +20,7 @@ type HubClient struct {
 	Conn   *websocket.Conn // 真正的 WebSocket 连接
 	Send   chan []byte     // 自己的发信箱（Hub 会往这里塞数据）
 	UserId int64           // 用于验证身份的用户ID
+	DocID  string          //用户编辑文档
 }
 
 // 1. 读泵 (从浏览器读 -> 发给 Hub)
@@ -34,8 +35,13 @@ func (c *HubClient) ReadPump() {
 		if err != nil {
 			break
 		}
-		// 把读到的消息塞给 Hub 进行广播
-		c.Hub.Broadcast <- message
+		// 【关键修改】把消息包装成 BroadcastMsg
+		// 这样 Hub 就知道要把这条消息发给哪个房间了
+		msg := &BroadcastMsg{
+			RoomID: c.DocID,
+			Data:   message,
+		}
+		c.Hub.Broadcast <- msg
 	}
 }
 
@@ -77,16 +83,17 @@ func (c *HubClient) WritePump() {
 func ServeWs(hub *Hub, c *gin.Context) {
 
 	token := c.Query("token")
+	docId := c.Query("docId")
 	if token == "" {
-		fmt.Println("❌ 拒绝连接：没有 Token") // 打印日志
-		c.JSON(401, gin.H{"error": "未携带 Token"})
+		fmt.Println(" 拒绝连接：没有 Token") // 打印日志
+		c.JSON(401, gin.H{"error": "缺少 token 或 docId"})
 		return
 	}
 
 	claims, err := ParseToken(token)
 	if err != nil {
-		// 【关键】打印具体的错误原因！
-		fmt.Println("❌ Token 验证失败，原因:", err)
+
+		fmt.Println(" Token 验证失败，原因:", err)
 		c.JSON(401, gin.H{"error": "无效的 Token: " + err.Error()})
 		return
 	}
@@ -106,6 +113,7 @@ func ServeWs(hub *Hub, c *gin.Context) {
 		Conn:   conn,
 		Send:   make(chan []byte, 256),
 		UserId: claims.Uid, // 记录下这个人是谁
+		DocID:  docId,
 	}
 
 	// 注册到 Hub
