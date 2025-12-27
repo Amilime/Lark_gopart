@@ -35,11 +35,12 @@ func (c *HubClient) ReadPump() {
 		if err != nil {
 			break
 		}
-		// 【关键修改】把消息包装成 BroadcastMsg
+		// 把消息包装成 BroadcastMsg
 		// 这样 Hub 就知道要把这条消息发给哪个房间了
 		msg := &BroadcastMsg{
 			RoomID: c.DocID,
 			Data:   message,
+			Sender: c,
 		}
 		c.Hub.Broadcast <- msg
 	}

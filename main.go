@@ -12,8 +12,10 @@ import (
 )
 
 func main() {
-	// 1. 创建并启动 Hub (大管家)
+	// 1. 创建并启动 Hub (大管家)和连接redis
 	// 这一步如果不做，后面没人处理消息
+	ws.InitRedis()
+
 	hub := ws.NewHub()
 	go hub.Run() // 让它在后台一直跑
 

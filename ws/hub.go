@@ -8,6 +8,7 @@ import (
 type BroadcastMsg struct {
 	RoomID string // 也就是 DocID
 	Data   []byte
+	Sender *HubClient // 发送者
 }
 
 type Hub struct {
@@ -42,6 +43,11 @@ func (h *Hub) Run() { // h的意思是把Run绑定到Hub上，就是后面h就�
 			}
 			// 把人放进房间
 			h.Rooms[client.DocID][client] = true
+			lastContent := GetDoc(client.DocID) //把Redis旧数据发给新人
+			if lastContent != "" {
+				// 单独发给这个人
+				client.Send <- []byte(lastContent)
+			}
 			fmt.Printf("用户进入房间 [%s]，当前房间人数: %d\n", client.DocID, len(h.Rooms[client.DocID]))
 
 		// 2. 有人退房
@@ -61,9 +67,13 @@ func (h *Hub) Run() { // h的意思是把Run绑定到Hub上，就是后面h就�
 
 		// 3. 广播消息
 		case msg := <-h.Broadcast:
+			SaveDoc(msg.RoomID, msg.Data) // 消息存入redis
 			// 只找特定房间的人
 			if room, ok := h.Rooms[msg.RoomID]; ok {
 				for client := range room {
+					if client == msg.Sender {
+						continue
+					} // 别给自己发
 					select {
 					case client.Send <- msg.Data:
 					default:
