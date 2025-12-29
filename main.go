@@ -2,55 +2,107 @@ package main
 
 import (
 	"fmt"
+	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
-	"lark/ws" // 【注意】这里 larks/ws 取决于你的 go.mod 里的 module 名字
-	// 如果你的 module 叫 lark，这里就是 lark/ws
-	// 如果报错，请看文件最上面的 package import 提示
+	"lark/ws"
 	"net/http"
 	"os"
 	"path/filepath"
 )
 
 func main() {
-	// 1. 创建并启动 Hub (大管家)和连接redis
-	// 这一步如果不做，后面没人处理消息
+	// 1. 初始化
 	ws.InitRedis()
-
+	ws.InitMySQL() // 必须初始化 MySQL
 	hub := ws.NewHub()
-	go hub.Run() // 让它在后台一直跑
+	go hub.Run()
 
 	r := gin.Default()
 	r.MaxMultipartMemory = 8 << 20
 
-	// 静态文件服务
-	r.Static("/files", "./uploads")
-	r.GET("/", func(c *gin.Context) {
-		c.String(http.StatusOK, "Go WebSocket Server is Running...")
-	})
+	config := cors.DefaultConfig()
+	config.AllowAllOrigins = true // 允许所有来源 (开发环境方便)
 
-	// 文件上传
+	config.AllowHeaders = []string{"Origin", "Content-Length", "Content-Type", "Authorization"}
+	r.Use(cors.New(config))
+
+	// 静态资源映射
+	r.Static("/files", "./uploads")
+
+	r.GET("/", func(c *gin.Context) {
+		c.String(http.StatusOK, "Go Server Running...")
+	})
+	
 	r.POST("/upload", func(c *gin.Context) {
-		file, err := c.FormFile("file")
+		// 1. 获取上传者信息 (Token)
+		token := c.GetHeader("Authorization")
+		if token == "" {
+			token = c.Query("token")
+		}
+
+		claims, err := ws.ParseToken(token)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "上传失败"})
+			c.JSON(401, gin.H{"error": "无效 Token"})
 			return
 		}
+
+		// 2. 接收文件
+		file, err := c.FormFile("file")
+		if err != nil {
+			c.JSON(400, gin.H{"error": "文件接收失败"})
+			return
+		}
+
+		// 3. 存磁盘
 		savePath := "./uploads"
 		if _, err := os.Stat(savePath); os.IsNotExist(err) {
 			os.Mkdir(savePath, 0755)
 		}
-		dst := filepath.Join(savePath, filepath.Base(file.Filename))
+		filename := filepath.Base(file.Filename)
+		dst := filepath.Join(savePath, filename)
 		c.SaveUploadedFile(file, dst)
-		fileUrl := fmt.Sprintf("http://localhost:8081/files/%s", filepath.Base(file.Filename))
-		c.JSON(http.StatusOK, gin.H{"status": "success", "url": fileUrl})
+
+		// 生成 URL
+		fileUrl := fmt.Sprintf("http://localhost:8081/files/%s", filename)
+
+		// 4. 【关键】存入 MySQL 数据库
+		// 这样 Java 的列表接口才能查到这个文件！
+		docId, dbErr := ws.CreateStaticDocument(filename, fileUrl, claims.Uid)
+
+		if dbErr != nil {
+			c.JSON(500, gin.H{"error": "数据库保存失败"})
+			return
+		}
+
+		c.JSON(200, gin.H{
+			"status": "success",
+			"url":    fileUrl,
+			"docId":  docId, // 返回数据库 ID
+			"type":   0,     // 0=静态文件
+		})
 	})
 
-	// 【关键】WebSocket 路由
-	// 把请求交给 ws 包里的 ServeWs 处理
-	r.GET("/ws", func(c *gin.Context) { //传gin.context指针（有点像数组首地址传数组)
+	r.POST("/api/version/save", func(c *gin.Context) {
+		type Req struct {
+			DocId string `json:"docId"`
+			Uid   int64  `json:"userId"`
+			Ver   int    `json:"versionNum"`
+		}
+		var req Req
+		c.ShouldBindJSON(&req)
+
+		err := ws.CreateVersionSnapshot(req.DocId, req.Uid, req.Ver)
+		if err != nil {
+			c.JSON(500, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(200, gin.H{"msg": "Saved"})
+	})
+
+	// WebSocket
+	r.GET("/ws/:room", func(c *gin.Context) {
 		ws.ServeWs(hub, c)
 	})
 
-	fmt.Println(" Go 服务启动在 :8081 ...")
 	r.Run(":8081")
 }

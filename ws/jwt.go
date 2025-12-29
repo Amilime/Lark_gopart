@@ -5,8 +5,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
-// 必须和 Java 端的 application.yml 保持完全一致！
-// 如果那边改了，这里也要改
+// 同 application.yml
 var jwtSecret = []byte("This_Is_A_Super_Secure_Key_For_Lark_2025")
 
 // 定义载荷结构 (对应 Java 里的 Claims)

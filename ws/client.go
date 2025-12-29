@@ -5,6 +5,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 	"net/http"
+	"strings"
 )
 
 // 升级器配置
@@ -39,7 +40,7 @@ func (c *HubClient) ReadPump() {
 		// 这样 Hub 就知道要把这条消息发给哪个房间了
 		msg := &BroadcastMsg{
 			RoomID: c.DocID,
-			Data:   message,
+			Data:   message, // 是Yjs二进制数据
 			Sender: c,
 		}
 		c.Hub.Broadcast <- msg
@@ -62,7 +63,7 @@ func (c *HubClient) WritePump() {
 		}
 
 		// 写回浏览器
-		w, err := c.Conn.NextWriter(websocket.TextMessage)
+		w, err := c.Conn.NextWriter(websocket.BinaryMessage)
 		if err != nil {
 			return
 		}
@@ -84,11 +85,23 @@ func (c *HubClient) WritePump() {
 func ServeWs(hub *Hub, c *gin.Context) {
 
 	token := c.Query("token")
-	docId := c.Query("docId")
-	if token == "" {
-		fmt.Println(" 拒绝连接：没有 Token") // 打印日志
-		c.JSON(401, gin.H{"error": "缺少 token 或 docId"})
+	docId := c.Param("room")
+	fmt.Println("------------------------------------------------")
+	fmt.Printf(">>> [Go调试] 收到连接请求: Room=%s\n", docId)
+	fmt.Printf(">>> [Go调试] 原始 Token: %s\n", token)
+	if docId == "" {
+		c.JSON(400, gin.H{"error": "房间号为空"})
 		return
+	}
+
+	if token == "" {
+		fmt.Println(">>> 失败: Token 为空")
+		c.JSON(401, gin.H{"error": "未提供 Token"})
+		return
+	}
+	if strings.HasPrefix(token, "Bearer ") {
+		token = strings.TrimPrefix(token, "Bearer ")
+		fmt.Println(">>> 自动去除 Bearer 前缀")
 	}
 
 	claims, err := ParseToken(token)
